@@ -1,0 +1,6 @@
+Thay api key ở chỗ env
+cần nodejs để chạy
+vào terminal chạy lệnh npm run dev
+thiếu thư viện thì tự cài: npm install -g nodemon
+thư viện cần cài: npm install express axios dotenv
+run: npm run dev

@@ -1,0 +1,23 @@
+{
+  "name": "weather-backend-server",
+  "version": "1.0.0",
+  "description": "Proxy API for Android Weather App",
+  "main": "api/index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js" 
+  },
+  "keywords": [
+    "api",
+    "weather",
+    "proxy",
+    "android"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.x.x",
+    "dotenv": "^16.x.x",
+    "express": "^4.x.x"
+  }
+}
