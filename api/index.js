@@ -1,7 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 // IMPORT THƯ VIỆN VERCEL KV (ĐỂ CACHE ONL)
-const { createClient } = require('@vercel/kv'); // Cần @vercel/kv
+const { createClient } = require('@vercel/kv');
 require('dotenv').config(); 
 
 const app = express();
@@ -11,20 +11,36 @@ const WEATHER_API_KEY = process.env.WEATHER_API_KEY;
 const BASE_URL = 'https://api.weatherapi.com/v1';
 const CACHE_TTL_SECONDS = 5 * 60; // 5 phút = 300 giây
 
-// KHỞI TẠO VERCEL KV CLIENT
-// Các biến môi trường sẽ được Vercel tự động cung cấp
-const kv = createClient({
-    // url: process.env.KV_REST_API_URL,
-    // token: process.env.KV_REST_API_TOKEN,
-    url: process.env.REDIS_URL,
-});
+// ----------------------------------------------------------------------
+// KHỞI TẠO VERCEL KV CLIENT AN TOÀN (SAFE INITIALIZATION)
+// Ngăn lỗi FUNCTION_INVOCATION_FAILED khi biến môi trường thiếu
+// ----------------------------------------------------------------------
+let kv = null;
+const redisUrl = process.env.REDIS_URL || process.env.KV_REST_API_URL;
+
+if (redisUrl) {
+    try {
+        // Thử khởi tạo với URL đầy đủ
+        kv = createClient({
+            url: redisUrl,
+            // Bỏ token nếu nó đã nằm trong URL (giống như REDIS_URL)
+        });
+        console.log("KV Client initialized successfully.");
+    } catch (error) {
+        console.error("CRITICAL ERROR: Failed to initialize KV client:", error.message);
+        kv = null; // Đảm bảo kv là null nếu khởi tạo thất bại
+    }
+} else {
+    console.warn("KV_REST_API_URL or REDIS_URL is missing. KV caching is disabled.");
+}
 
 // ----------------------------------------------------------------------
 // Hàm tiện ích gọi WeatherAPI (Giữ nguyên)
 // ----------------------------------------------------------------------
 async function callWeatherApi(endpoint, queryParams) {
     if (!WEATHER_API_KEY) {
-        throw new Error("WEATHER_API_KEY is not configured.");
+        // Ném lỗi rõ ràng nếu thiếu API Key
+        throw new Error("WEATHER_API_KEY is not configured. Check Vercel Environment Variables.");
     }
     const params = new URLSearchParams({
         ...queryParams,
@@ -53,17 +69,17 @@ app.get('/api/current', async (req, res) => {
     const cacheKey = q.toLowerCase().trim();
 
     // --- BƯỚC 1: KIỂM TRA CACHE TRONG KV STORE ---
-    try {
-        // Dùng kv.get để lấy dữ liệu cache từ dịch vụ bên ngoài
-        const cachedData = await kv.get(cacheKey); 
-
-        if (cachedData) {
-            console.log(`[CACHE HIT] Trả về dữ liệu Cache KV cho ${q}.`);
-            return res.status(200).json(cachedData);
+    if (kv) { // KIỂM TRA ĐẢM BẢO KV ĐÃ KHỞI TẠO
+        try {
+            const cachedData = await kv.get(cacheKey); 
+            if (cachedData) {
+                console.log(`[CACHE HIT] Trả về dữ liệu Cache KV cho ${q}.`);
+                return res.status(200).json(cachedData);
+            }
+        } catch (cacheError) {
+            // Lỗi ở đây là lỗi mạng (fetch failed) hoặc kết nối, không làm sập hàm
+            console.error(`[CACHE ERROR] Không thể truy cập KV: ${cacheError.message}`);
         }
-    } catch (cacheError) {
-        // Log lỗi cache, nhưng không chặn request
-        console.error(`[CACHE ERROR] Không thể truy cập KV: ${cacheError.message}`);
     }
 
     // --- BƯỚC 2: CACHE MISS: GỌI API BÊN THỨ 3 ---
@@ -72,12 +88,16 @@ app.get('/api/current', async (req, res) => {
     
     // --- BƯỚC 3: LƯU VÀO CACHE NẾU GỌI THÀNH CÔNG ---
     if (status === 200) {
-        try {
-            // Dùng kv.set để lưu dữ liệu và đặt TTL (thời gian sống) là 5 phút
-            await kv.set(cacheKey, data, { ex: CACHE_TTL_SECONDS });
-            console.log(`[CACHE STORED] Đã lưu dữ liệu mới cho ${q} vào KV với TTL=${CACHE_TTL_SECONDS}s.`);
-        } catch (storeError) {
-            console.error(`[CACHE ERROR] Không thể lưu vào KV: ${storeError.message}`);
+        if (kv) { // KIỂM TRA ĐẢM BẢO KV ĐÃ KHỞI TẠO
+            try {
+                // Dùng kv.set để lưu dữ liệu và đặt TTL (thời gian sống) là 5 phút
+                await kv.set(cacheKey, data, { ex: CACHE_TTL_SECONDS });
+                console.log(`[CACHE STORED] Đã lưu dữ liệu mới cho ${q} vào KV với TTL=${CACHE_TTL_SECONDS}s.`);
+            } catch (storeError) {
+                console.error(`[CACHE ERROR] Không thể lưu vào KV: ${storeError.message}`);
+            }
+        } else {
+            console.warn(`[CACHE DISABLED] Dữ liệu không được lưu vào KV do lỗi khởi tạo.`);
         }
     }
     
@@ -107,8 +127,7 @@ app.get('/api/search', async (req, res) => {
 
 app.get('/', (req, res) => {
     res.status(200).json({
-        message: "Weather Proxy API is running on Vercel with Vercel KV Smart Caching.",
-        note: "Data is cached externally for 5 minutes.",
+        message: "Weather Proxy API is running on Vercel with Smart Caching.",
         status: "OK"
     });
 });
