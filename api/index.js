@@ -1,6 +1,5 @@
 const express = require('express');
 const axios = require('axios');
-// IMPORT THƯ VIỆN VERCEL KV (ĐỂ CACHE ONL)
 const { createClient } = require('@vercel/kv');
 require('dotenv').config(); 
 
@@ -12,26 +11,51 @@ const BASE_URL = 'https://api.weatherapi.com/v1';
 const CACHE_TTL_SECONDS = 5 * 60; // 5 phút = 300 giây
 
 // ----------------------------------------------------------------------
-// KHỞI TẠO VERCEL KV CLIENT AN TOÀN (SAFE INITIALIZATION)
-// Ngăn lỗi FUNCTION_INVOCATION_FAILED khi biến môi trường thiếu
+// LOGIC PHÂN TÍCH VÀ KHỞI TẠO KV CLIENT AN TOÀN
 // ----------------------------------------------------------------------
 let kv = null;
-const redisUrl = process.env.REDIS_URL || process.env.KV_REST_API_URL;
 
-if (redisUrl) {
+// Lấy chuỗi kết nối Redis URI đầy đủ (chứa cả token và host)
+const fullRedisUri = process.env.REDIS_URL || null;
+
+if (fullRedisUri) {
     try {
-        // Thử khởi tạo với URL đầy đủ
-        kv = createClient({
-            url: redisUrl,
-            // Bỏ token nếu nó đã nằm trong URL (giống như REDIS_URL)
-        });
-        console.log("KV Client initialized successfully.");
+        // Phân tích URI để trích xuất host/port và password/token
+        // Ví dụ: redis://default:TOKEN@HOST:PORT
+        const urlObj = new URL(fullRedisUri);
+        
+        // 1. Trích xuất Token (mật khẩu)
+        // user:password -> password
+        const kvToken = urlObj.password; 
+        
+        // 2. Tạo URL REST API (HTTPS) từ host và port
+        const kvHost = urlObj.hostname;
+        const kvPort = urlObj.port;
+        
+        // Tạo URL REST API ở định dạng HTTPS mà @vercel/kv yêu cầu
+        // LƯU Ý: Nếu không có port, thư viện sẽ mặc định dùng port 443 (HTTPS)
+        let kvRestUrl = `https://${kvHost}`;
+        if (kvPort) {
+            kvRestUrl += `:${kvPort}`;
+        }
+        
+        if (kvToken) {
+            kv = createClient({
+                url: kvRestUrl,
+                token: kvToken,
+            });
+            console.log("KV Client initialized successfully using parsed REDIS_URL.");
+        } else {
+            // Trường hợp không có token trong URI (rất hiếm)
+            console.error("CRITICAL ERROR: Token missing in REDIS_URL.");
+        }
+        
     } catch (error) {
-        console.error("CRITICAL ERROR: Failed to initialize KV client:", error.message);
-        kv = null; // Đảm bảo kv là null nếu khởi tạo thất bại
+        console.error("CRITICAL ERROR: Failed to parse REDIS_URL or initialize KV client:", error.message);
+        kv = null; 
     }
 } else {
-    console.warn("KV_REST_API_URL or REDIS_URL is missing. KV caching is disabled.");
+    console.warn("REDIS_URL is missing. KV caching is disabled.");
 }
 
 // ----------------------------------------------------------------------
@@ -106,10 +130,9 @@ app.get('/api/current', async (req, res) => {
 });
 
 // ----------------------------------------------------------------------
-// CÁC ENDPOINT KHÁC (GIỮ NGUYÊN)
+// CÁC ENDPOINT KHÁC VÀ EXPORT
 // ----------------------------------------------------------------------
 app.get('/api/forecast', async (req, res) => {
-    // ... logic chuyển tiếp API forecast
     const { q, days } = req.query;
     if (!q) return res.status(400).json({ error: "Thiếu tham số 'q'." });
     const forecastDays = days && !isNaN(parseInt(days)) ? parseInt(days) : 5; 
@@ -118,7 +141,6 @@ app.get('/api/forecast', async (req, res) => {
 });
 
 app.get('/api/search', async (req, res) => {
-    // ... logic chuyển tiếp API search
     const { q } = req.query;
     if (!q) return res.status(400).json({ error: "Thiếu tham số 'q'." });
     const { status, data } = await callWeatherApi('search', { q });
@@ -132,7 +154,4 @@ app.get('/', (req, res) => {
     });
 });
 
-// ----------------------------------------------------------------------
-// XUẤT MODULE CHO VERCEL (BẮT BUỘC)
-// ----------------------------------------------------------------------
 module.exports = app;
