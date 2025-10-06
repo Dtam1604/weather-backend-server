@@ -14,8 +14,9 @@ const CACHE_TTL_SECONDS = 5 * 60; // 5 phút = 300 giây
 // KHỞI TẠO VERCEL KV CLIENT
 // Các biến môi trường sẽ được Vercel tự động cung cấp
 const kv = createClient({
-    url: process.env.KV_REST_API_URL,
-    token: process.env.KV_REST_API_TOKEN,
+    // url: process.env.KV_REST_API_URL,
+    // token: process.env.KV_REST_API_TOKEN,
+    url: process.env.REDIS_URL,
 });
 
 // ----------------------------------------------------------------------
