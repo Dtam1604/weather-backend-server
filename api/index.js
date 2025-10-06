@@ -106,11 +106,44 @@ app.get('/api/current', async (req, res) => {
 // ----------------------------------------------------------------------
 // CÁC ENDPOINT KHÁC (Chuyển tiếp API)
 // ----------------------------------------------------------------------
+// ----------------------------------------------------------------------
+// ENDPOINT 2: Dự báo Thời tiết (/api/forecast) - KHÔNG CACHE
+// ----------------------------------------------------------------------
 app.get('/api/forecast', async (req, res) => {
     const { q, days } = req.query;
     if (!q) return res.status(400).json({ error: "Thiếu tham số 'q'." });
+    
     const forecastDays = days && !isNaN(parseInt(days)) ? parseInt(days) : 5; 
+    
+    // Luôn gọi với alerts: 'yes' để nhận dữ liệu cảnh báo
     const { status, data } = await callWeatherApi('forecast', { q, days: forecastDays, aqi: 'yes', alerts: 'yes' });
+
+    // --- LOGIC XỬ LÝ CẢNH BÁO MỚI ---
+    if (status === 200 && data.alerts && data.alerts.alert && data.alerts.alert.length > 0) {
+        // Trích xuất các cảnh báo và tóm tắt chúng
+        const severeAlerts = data.alerts.alert.map(alert => {
+            return {
+                headline: alert.headline,
+                msg_type: alert.msg_type,
+                severity: alert.severity, // Ví dụ: Watch, Warning, Advisory
+                area: alert.areas,
+                instruction: alert.instruction.substring(0, 100) + '...' // Tóm tắt chỉ thị
+            };
+        });
+
+        // Đính kèm trạng thái cảnh báo tóm tắt vào phản hồi
+        const responseData = {
+            ...data,
+            // Thêm trường cảnh báo tóm tắt để client dễ dàng kiểm tra
+            is_severe_alert_active: true,
+            severe_alert_summary: severeAlerts,
+            warning_note: "Thông tin cảnh báo thô nằm trong trường 'alerts'."
+        };
+        return res.status(status).json(responseData);
+    }
+    // ------------------------------------
+
+    // Trả về kết quả bình thường nếu không có cảnh báo nghiêm trọng
     res.status(status).json(data);
 });
 
