@@ -1,148 +1,126 @@
-// File: server.js (Mã nguồn Web API trung gian đầy đủ)
 const express = require('express');
 const axios = require('axios');
-require('dotenv').config(); // Tải biến từ file .env
+require('dotenv').config(); 
 
-// Cấu hình API và Server
 const app = express();
-const PORT = process.env.PORT || 3000;
+// DÒNG QUAN TRỌNG: Cấu hình Pretty Print (in đẹp) với 2 khoảng trắng
+app.set('json spaces', 2); 
+app.use(express.json());
+
 const WEATHER_API_KEY = process.env.WEATHER_API_KEY;
-const BASE_URL = 'http://api.weatherapi.com/v1';
+const BASE_URL = 'https://api.weatherapi.com/v1';
 
-// Cấu hình CORS
-app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
-    next();
-});
-
-// Hàm tiện ích chung để gọi WeatherAPI.com
+// ----------------------------------------------------------------------
+// Hàm tiện ích gọi WeatherAPI (Không Lọc Dữ Liệu & Thêm Tiếng Việt)
+// ----------------------------------------------------------------------
 async function callWeatherApi(endpoint, queryParams) {
     if (!WEATHER_API_KEY) {
-        throw { status: 500, message: "Lỗi cấu hình: Khóa API không tìm thấy trên máy chủ." };
+        throw new Error("WEATHER_API_KEY is not configured. Check .env file (local) or Vercel Environment Variables (online).");
     }
 
+    // Luôn thêm Khóa API và Ngôn ngữ tiếng Việt (lang: 'vi')
     const params = new URLSearchParams({
         ...queryParams,
         key: WEATHER_API_KEY,
-        lang: 'vi' // Đặt ngôn ngữ tiếng Việt theo yêu cầu ứng dụng
+        lang: 'vi' 
     }).toString();
 
-    const fullUrl = `${BASE_URL}${endpoint}?${params}`;
-    
+    const fullUrl = `${BASE_URL}/${endpoint}.json?${params}`;
+    console.log(`Forwarding request to: ${BASE_URL}/${endpoint}.json`);
+
     try {
         const response = await axios.get(fullUrl);
-        return response.data;
+        // Trả về toàn bộ dữ liệu (response.data) nguyên vẹn
+        return {
+            status: 200,
+            data: response.data
+        };
     } catch (error) {
-        const status = error.response?.status || 500;
-        const message = error.response?.data?.error?.message || "Lỗi không xác định khi gọi WeatherAPI.";
-        throw { status, message };
+        // Xử lý và chuyển tiếp lỗi từ API bên thứ 3
+        const status = error.response ? error.response.status : 500;
+        const data = error.response ? error.response.data : { code: 'API_ERROR', message: "Internal server error." };
+        
+        return {
+            status: status,
+            data: data
+        };
     }
 }
 
-// ----------------------------------------------------
-//                    ENDPOINTS CỐT LÕI
-// ----------------------------------------------------
-
-/**
- * Endpoint 1: Thời tiết Hiện tại (UC1)
- * Yêu cầu: GET /api/current?q=<LOCATION>
- */
+// ----------------------------------------------------------------------
+// ENDPOINT 1: Xem thời tiết hiện tại (/api/current)
+// ----------------------------------------------------------------------
 app.get('/api/current', async (req, res) => {
-    const q = req.query.q; 
-    if (!q) return res.status(400).json({ error: "Tham số 'q' (vị trí) là bắt buộc." });
+    const { q } = req.query;
 
-    try {
-        const data = await callWeatherApi('/current.json', { q, aqi: 'yes' }); 
-        
-        // Lọc dữ liệu cần thiết cho màn hình chính (MainActivity)
-        const filteredData = {
-            location: {
-                name: data.location.name,
-                country: data.location.country,
-                lat: data.location.lat,
-                lon: data.location.lon,
-            },
-            current: {
-                temp_c: data.current.temp_c,
-                condition: data.current.condition.text, 
-                icon_url: data.current.condition.icon, // Icon minh họa
-                humidity: data.current.humidity,
-                wind_kph: data.current.wind_kph,
-            }
-        };
-
-        res.json(filteredData);
-    } catch (err) {
-        res.status(err.status || 500).json({ error: "Không thể tải dữ liệu thời tiết.", details: err.message });
+    if (!q) {
+        return res.status(400).json({ 
+            error: "Thiếu tham số 'q'. Vui lòng cung cấp vị trí." 
+        });
     }
+
+    const { status, data } = await callWeatherApi('current', { q, aqi: 'yes' });
+    
+    // Trả về kết quả nguyên vẹn (Không lọc dữ liệu)
+    res.status(status).json(data);
 });
 
-/**
- * Endpoint 2: Dự báo (UC2)
- * Yêu cầu: GET /api/forecast?q=<LOCATION>&days=<NUMBER>
- */
+// ----------------------------------------------------------------------
+// ENDPOINT 2: Xem dự báo thời tiết (/api/forecast)
+// ----------------------------------------------------------------------
 app.get('/api/forecast', async (req, res) => {
-    const q = req.query.q;
-    const days = req.query.days || 5; 
-    
-    if (!q) return res.status(400).json({ error: "Tham số 'q' (vị trí) là bắt buộc." });
-    if (days < 1 || days > 14) return res.status(400).json({ error: "Tham số 'days' phải từ 1 đến 14." });
+    const { q, days } = req.query;
 
-    try {
-        // Trả về toàn bộ dữ liệu dự báo để Android (ForecastActivity) xử lý
-        const data = await callWeatherApi('/forecast.json', { 
-            q, 
-            days, 
-            aqi: 'yes', 
-            alerts: 'yes' // Hỗ trợ UC7: Nhận thông báo thời tiết xấu
-        }); 
-        
-        res.json(data); 
-    } catch (err) {
-        res.status(err.status || 500).json({ error: "Không thể tải dữ liệu dự báo.", details: err.message });
+    if (!q) {
+        return res.status(400).json({ 
+            error: "Thiếu tham số 'q'. Vui lòng cung cấp vị trí." 
+        });
     }
+
+    const forecastDays = days && !isNaN(parseInt(days)) ? parseInt(days) : 5; 
+    
+    const { status, data } = await callWeatherApi('forecast', { q, days: forecastDays, aqi: 'yes', alerts: 'yes' });
+
+    // Trả về kết quả nguyên vẹn (Không lọc dữ liệu)
+    res.status(status).json(data);
 });
 
-/**
- * Endpoint 3: Tìm kiếm Thành phố (UC3)
- * Yêu cầu: GET /api/search?q=<SEARCH_QUERY>
- */
+// ----------------------------------------------------------------------
+// ENDPOINT 3: Tìm kiếm thành phố (/api/search)
+// ----------------------------------------------------------------------
 app.get('/api/search', async (req, res) => {
-    const q = req.query.q;
+    const { q } = req.query;
+
+    if (!q) {
+        return res.status(400).json({ 
+            error: "Thiếu tham số 'q'. Vui lòng cung cấp từ khóa tìm kiếm." 
+        });
+    }
+
+    const { status, data } = await callWeatherApi('search', { q });
     
-    if (!q || q.length < 2) {
-        return res.status(400).json({ error: "Tham số 'q' phải có ít nhất 2 ký tự để tìm kiếm thành phố." });
-    }
-
-    try {
-        const data = await callWeatherApi('/search.json', { q }); 
-        
-        // Lọc kết quả tìm kiếm (cần thiết cho Bảng City trong RoomDatabase)
-        const searchResults = data.map(item => ({
-            id: item.id,
-            name: item.name,
-            region: item.region,
-            country: item.country,
-            lat: item.lat,
-            lon: item.lon,
-        }));
-        
-        res.json(searchResults); 
-    } catch (err) {
-        res.status(err.status || 500).json({ error: "Không thể tìm kiếm thành phố.", details: err.message });
-    }
+    // Trả về kết quả nguyên vẹn (Không lọc dữ liệu)
+    res.status(status).json(data);
 });
 
-// Endpoint kiểm tra hoạt động của server
+// ----------------------------------------------------------------------
+// ENDPOINT 4 & CẤU HÌNH LOCAL/VERCEL
+// ----------------------------------------------------------------------
 app.get('/', (req, res) => {
-    res.send('Weather Proxy API is running!');
+    res.status(200).json({
+        message: "Weather Proxy API is running! Data filtering is INACTIVE.",
+        note: "JSON is configured for 'Pretty Print' with 2 spaces.",
+        status: "OK"
+    });
 });
-module.exports = app;
-// Khởi động Server
-// app.listen(PORT, () => {
-//     console.log(`\n***************************************************`);
-//     console.log(`🚀 Web API Trung Gian ĐÃ SẴN SÀNG trên cổng ${PORT}`);
-//     console.log(`Kiểm tra Current: http://localhost:${PORT}/api/current?q=Hanoi`);
-//     console.log(`***************************************************\n`);
-// });
+
+module.exports = app; 
+
+const PORT = process.env.PORT || 3000; 
+
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`🚀 Web API Trung Gian (PRETTY PRINT ACTIVE) ĐÃ SẴN SÀNG trên cổng ${PORT}`);
+        console.log(`URL cục bộ: http://localhost:${PORT}`);
+    });
+}
